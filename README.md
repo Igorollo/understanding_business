@@ -1,3 +1,7 @@
+# Presentation
+
+https://canva.link/euf8he2a5ph2jwb
+
 # Demand Forecasting — Case Study
 
 Read [CASE_STUDY.md](CASE_STUDY.md) for the full problem description.

@@ -21,8 +21,7 @@ app = Flask(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────
 
-# TODO: Set the backend URL
-DJANGO_URL = "..."
+DJANGO_URL = "https://durczok.ovh/chains"
 
 # Reference data that must be seeded during setup
 COUNTRIES = [
@@ -44,6 +43,29 @@ CODE_TYPES = [
 # the same requests.get / requests.post / requests.delete logic
 # in every route. Think about what parameters they need and what
 # they should return (hint: look at Flask's Response class).
+
+
+def _backend_response(response: requests.Response) -> Response:
+    return Response(
+        response.content,
+        status=response.status_code,
+        content_type=response.headers.get("Content-Type", "application/json"),
+    )
+
+
+def _proxy_get(path: str, params: dict | None = None) -> Response:
+    response = requests.get(f"{DJANGO_URL}{path}", params=params)
+    return _backend_response(response)
+
+
+def _proxy_post(path: str, data: dict | None = None) -> Response:
+    response = requests.post(f"{DJANGO_URL}{path}", json=data)
+    return _backend_response(response)
+
+
+def _proxy_delete(path: str) -> Response:
+    response = requests.delete(f"{DJANGO_URL}{path}")
+    return _backend_response(response)
 
 
 # ── Setup ─────────────────────────────────────────────────────────────
@@ -68,8 +90,46 @@ def setup():
 
     Return: jsonify({"status": "ok"}), 200
     """
-    # TODO: Implement setup logic
-    pass
+    while True:
+        response = requests.get(f"{DJANGO_URL}/api/events/", params={"page_size": 100})
+        if response.status_code != 200:
+            return _backend_response(response)
+
+        data = response.json()
+        events = data.get("results", data) if isinstance(data, dict) else data
+        if not events:
+            break
+
+        for event in events:
+            delete_response = requests.delete(f"{DJANGO_URL}/api/events/{event['id']}/")
+            if delete_response.status_code >= 400:
+                return _backend_response(delete_response)
+
+    for code, name in COUNTRIES:
+        response = requests.get(f"{DJANGO_URL}/api/countries/{code}/")
+        if response.status_code == 404:
+            create_response = requests.post(
+                f"{DJANGO_URL}/api/countries/",
+                json={"code": code, "name": name},
+            )
+            if create_response.status_code >= 400:
+                return _backend_response(create_response)
+        elif response.status_code >= 400:
+            return _backend_response(response)
+
+    for code_type_id, code_type in CODE_TYPES:
+        response = requests.get(f"{DJANGO_URL}/api/code-types/{code_type_id}/")
+        if response.status_code == 404:
+            create_response = requests.post(
+                f"{DJANGO_URL}/api/code-types/",
+                json={"id": code_type_id, "type": code_type},
+            )
+            if create_response.status_code >= 400:
+                return _backend_response(create_response)
+        elif response.status_code >= 400:
+            return _backend_response(response)
+
+    return jsonify({"status": "ok"}), 200
 
 
 # ── Events ────────────────────────────────────────────────────────────
@@ -80,8 +140,7 @@ def list_events():
     List events. Forward query parameters (e.g. page_size) to the backend.
     Backend: GET /api/events/
     """
-    # TODO: Implement
-    pass
+    return _proxy_get("/api/events/", dict(request.args))
 
 
 @app.route("/api/events/", methods=["POST"])
@@ -100,8 +159,7 @@ def get_event(event_id):
     Get a single event by ID.
     Backend: GET /api/events/<event_id>/
     """
-    # TODO: Implement
-    pass
+    return _proxy_get(f"/api/events/{event_id}/")
 
 
 @app.route("/api/events/<int:event_id>/", methods=["DELETE"])
@@ -122,8 +180,7 @@ def list_families():
     List product families. Forward query parameters to the backend.
     Backend: GET /api/product-families/
     """
-    # TODO: Implement
-    pass
+    return _proxy_get("/api/product-families/", dict(request.args))
 
 
 @app.route("/api/product-families/<int:family_id>/", methods=["GET"])
@@ -132,8 +189,7 @@ def get_family(family_id):
     Get a single product family by ID.
     Backend: GET /api/product-families/<family_id>/
     """
-    # TODO: Implement
-    pass
+    return _proxy_get(f"/api/product-families/{family_id}/")
 
 
 @app.route("/api/product-families/recompute/", methods=["POST"])
