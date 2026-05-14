@@ -149,8 +149,7 @@ def create_event():
     Create a new event. Forward the JSON body to the backend.
     Backend: POST /api/events/
     """
-    # TODO: Implement
-    pass
+    return _proxy_post("/api/events/", request.get_json())
 
 
 @app.route("/api/events/<int:event_id>/", methods=["GET"])
@@ -168,8 +167,7 @@ def delete_event(event_id):
     Delete a single event by ID.
     Backend: DELETE /api/events/<event_id>/
     """
-    # TODO: Implement
-    pass
+    return _proxy_delete(f"/api/events/{event_id}/")
 
 
 # ── Product Families ─────────────────────────────────────────────────
