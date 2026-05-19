@@ -1,0 +1,93 @@
+Demand Forecasting API Test — target: http://localhost:5050
+Families: 100  Countries: ['PL', 'DE', 'US', 'JP', 'CN']  CodeType: IPC
+
+=== PHASE 0: SETUP ===
+  PASS  POST /api/setup/ returns 200
+
+=== PHASE 1: EVENT INGESTION (100 families) ===
+  Created 100 families (300 avg events)
+
+  --- Failure cases (must all be rejected with HTTP 400) ---
+  PASS  Double introduction
+  PASS  Overlapping generation
+  PASS  Double discontinuation
+  PASS  Chain bad discontinuation_code
+  PASS  Chain bad introduction_code
+  PASS  Discont never-introduced
+  PASS  Chain missing discontinuation_code
+  PASS  Intro missing introduction_code
+  PASS  Discont missing discontinuation_code
+  PASS  Chain same codes
+  PASS  Invalid country code
+  PASS  Invalid code type
+  PASS  Missing date
+
+  Triggering family recomputation...
+  PASS  Recompute returns 200
+
+=== PHASE 2: FAMILY QUERIES ===
+  PASS  Resolve code=1000324 → family=CN-IPC-0006
+  PASS    Same family for code=1000326
+  PASS    Reverse resolve family=CN-IPC-0006
+  PASS  Resolve code=1000042 → family=US-IPC-0019
+  PASS    Same family for code=1000044
+  PASS    Reverse resolve family=US-IPC-0019
+  PASS  Resolve code=1000035 → family=PL-IPC-0009
+  PASS    Same family for code=1000038
+  PASS    Reverse resolve family=PL-IPC-0009
+  PASS  Resolve code=1000218 → family=JP-IPC-0015
+  PASS    Same family for code=1000221
+  PASS    Reverse resolve family=JP-IPC-0015
+  PASS  Resolve code=1000141 → family=CN-IPC-0019
+  PASS    Same family for code=1000143
+  PASS    Reverse resolve family=CN-IPC-0019
+  PASS  Resolve code=1000249 → family=US-IPC-0001
+  PASS    Same family for code=1000252
+  PASS    Reverse resolve family=US-IPC-0001
+  PASS  Resolve code=1000202 → family=JP-IPC-0011
+  PASS    Same family for code=1000204
+  PASS    Reverse resolve family=JP-IPC-0011
+  PASS  Resolve code=1000091 → family=JP-IPC-0016
+  PASS    Same family for code=1000094
+  PASS    Reverse resolve family=JP-IPC-0016
+  PASS  Resolve code=1000134 → family=US-IPC-0003
+  PASS    Same family for code=1000137
+  PASS    Reverse resolve family=US-IPC-0003
+  PASS  Resolve code=1000018 → family=PL-IPC-0004
+  PASS    Same family for code=1000021
+  PASS    Reverse resolve family=PL-IPC-0004
+  PASS  Resolve code=1000239 → family=CN-IPC-0017
+  PASS    Same family for code=1000241
+  PASS    Reverse resolve family=CN-IPC-0017
+  PASS  Resolve code=1000107 → family=JP-IPC-0019
+  PASS    Same family for code=1000109
+  PASS    Reverse resolve family=JP-IPC-0019
+  PASS  Resolve code=1000154 → family=JP-IPC-0002
+  PASS    Same family for code=1000156
+  PASS    Reverse resolve family=JP-IPC-0002
+  PASS  Resolve code=1000160 → family=PL-IPC-0003
+  PASS    Same family for code=1000162
+  PASS    Reverse resolve family=PL-IPC-0003
+  PASS  Resolve code=1000290 → family=CN-IPC-0009
+  PASS    Same family for code=1000293
+  PASS    Reverse resolve family=CN-IPC-0009
+  PASS  Resolve code=1000236 → family=JP-IPC-0018
+  PASS    Same family for code=1000238
+  PASS    Reverse resolve family=JP-IPC-0018
+  PASS  Resolve code=1000151 → family=US-IPC-0009
+  PASS    Same family for code=1000153
+  PASS    Reverse resolve family=US-IPC-0009
+  PASS  Resolve code=1000229 → family=DE-IPC-0008
+  PASS    Same family for code=1000232
+  PASS    Reverse resolve family=DE-IPC-0008
+  PASS  Resolve code=1000045 → family=JP-IPC-0003
+  PASS    Same family for code=1000047
+  PASS    Reverse resolve family=JP-IPC-0003
+  PASS  Resolve code=1000147 → family=DE-IPC-0009
+  PASS    Same family for code=1000150
+  PASS    Reverse resolve family=DE-IPC-0009
+
+=== RESULTS ===
+  Passed: 75
+  Failed: 0
+  Score:  75/75 (100%)
