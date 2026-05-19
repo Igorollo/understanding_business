@@ -3,16 +3,17 @@ Adapter: a Flask server that proxies the student-facing API
 to the Django demand forecasting backend.
 
 The test script (test_api.py) calls this server on port 5050.
-Your job is to implement each route so that it correctly forwards
-requests to the backend and returns the responses.
+Each route forwards requests to the backend and returns the backend
+response with the original status code.
 
 Run:
     1. docker compose up
     2. docker compose exec app python test_api.py
     3. Edit this file, then: docker compose restart
-
-Repeat steps 2–3 until all tests pass.
 """
+
+import os
+from typing import Any
 
 import requests
 from flask import Flask, Response, jsonify, request
@@ -21,7 +22,8 @@ app = Flask(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────
 
-DJANGO_URL = "https://durczok.ovh/chains"
+DJANGO_URL = os.getenv("DJANGO_URL", "https://durczok.ovh/chains").rstrip("/")
+REQUEST_TIMEOUT_SECONDS = int(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
 
 # Reference data that must be seeded during setup
 COUNTRIES = [
@@ -39,13 +41,15 @@ CODE_TYPES = [
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
-# TIP: You may want to create helper functions to avoid repeating
-# the same requests.get / requests.post / requests.delete logic
-# in every route. Think about what parameters they need and what
-# they should return (hint: look at Flask's Response class).
-
 
 def _backend_response(response: requests.Response) -> Response:
+    """
+    Preserve backend response body, status code, and content type.
+
+    This is important because the official test expects:
+    - valid event creation -> 201
+    - invalid event creation -> 400
+    """
     return Response(
         response.content,
         status=response.status_code,
@@ -53,19 +57,84 @@ def _backend_response(response: requests.Response) -> Response:
     )
 
 
-def _proxy_get(path: str, params: dict | None = None) -> Response:
-    response = requests.get(f"{DJANGO_URL}{path}", params=params)
+def _backend_error_response(method: str, path: str, exc: Exception) -> tuple[Response, int]:
+    """
+    Return a clear local error if the remote Django backend cannot be reached.
+    """
+    return jsonify(
+        {
+            "status": "backend_error",
+            "method": method,
+            "url": f"{DJANGO_URL}{path}",
+            "detail": str(exc),
+        }
+    ), 502
+
+
+def _query_params() -> dict[str, Any]:
+    """
+    Forward query parameters from Flask to Django.
+    The official test uses single-value query parameters.
+    """
+    return request.args.to_dict(flat=True)
+
+
+def _json_body() -> dict[str, Any]:
+    """
+    Forward JSON body. If no JSON is provided, send an empty object.
+    """
+    return request.get_json(silent=True) or {}
+
+
+def _proxy_get(path: str, params: dict[str, Any] | None = None) -> Response:
+    try:
+        response = requests.get(
+            f"{DJANGO_URL}{path}",
+            params=params,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        return _backend_error_response("GET", path, exc)
+
     return _backend_response(response)
 
 
-def _proxy_post(path: str, data: dict | None = None) -> Response:
-    response = requests.post(f"{DJANGO_URL}{path}", json=data)
+def _proxy_post(path: str, data: dict[str, Any] | None = None) -> Response:
+    try:
+        response = requests.post(
+            f"{DJANGO_URL}{path}",
+            json=data if data is not None else {},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        return _backend_error_response("POST", path, exc)
+
     return _backend_response(response)
 
 
 def _proxy_delete(path: str) -> Response:
-    response = requests.delete(f"{DJANGO_URL}{path}")
+    try:
+        response = requests.delete(
+            f"{DJANGO_URL}{path}",
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        return _backend_error_response("DELETE", path, exc)
+
     return _backend_response(response)
+
+
+# ── Local health check ─────────────────────────────────────────────────
+
+@app.route("/", methods=["GET"])
+def index():
+    return jsonify(
+        {
+            "status": "ok",
+            "service": "chains-flask-adapter",
+            "backend": DJANGO_URL,
+        }
+    ), 200
 
 
 # ── Setup ─────────────────────────────────────────────────────────────
@@ -75,57 +144,96 @@ def setup():
     """
     Reset state and seed reference data in the Django backend.
 
-    This endpoint should:
-    1. Delete ALL existing events (fetch pages of events and delete each one)
-    2. Ensure all COUNTRIES exist (check if each exists, create if not)
-    3. Ensure all CODE_TYPES exist (check if each exists, create if not)
-
-    Backend API reference:
-      - GET  /api/events/?page_size=100  → paginated list (check "results" key)
-      - DELETE /api/events/<id>/
-      - GET  /api/countries/<code>/       → 404 if missing
-      - POST /api/countries/              → {"code": ..., "name": ...}
-      - GET  /api/code-types/<id>/        → 404 if missing
-      - POST /api/code-types/             → {"id": ..., "type": ...}
-
-    Return: jsonify({"status": "ok"}), 200
+    This endpoint:
+    1. Deletes all existing events.
+    2. Ensures all required countries exist.
+    3. Ensures all required code types exist.
+    4. Returns 200 when setup is complete.
     """
+
+    # 1. Delete all existing events.
     while True:
-        response = requests.get(f"{DJANGO_URL}/api/events/", params={"page_size": 100})
+        try:
+            response = requests.get(
+                f"{DJANGO_URL}/api/events/",
+                params={"page_size": 100},
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+        except requests.RequestException as exc:
+            return _backend_error_response("GET", "/api/events/", exc)
+
         if response.status_code != 200:
             return _backend_response(response)
 
         data = response.json()
         events = data.get("results", data) if isinstance(data, dict) else data
+
         if not events:
             break
 
         for event in events:
-            delete_response = requests.delete(f"{DJANGO_URL}/api/events/{event['id']}/")
+            event_id = event["id"]
+
+            try:
+                delete_response = requests.delete(
+                    f"{DJANGO_URL}/api/events/{event_id}/",
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
+            except requests.RequestException as exc:
+                return _backend_error_response("DELETE", f"/api/events/{event_id}/", exc)
+
             if delete_response.status_code >= 400:
                 return _backend_response(delete_response)
 
+    # 2. Ensure countries exist.
     for code, name in COUNTRIES:
-        response = requests.get(f"{DJANGO_URL}/api/countries/{code}/")
-        if response.status_code == 404:
-            create_response = requests.post(
-                f"{DJANGO_URL}/api/countries/",
-                json={"code": code, "name": name},
+        try:
+            response = requests.get(
+                f"{DJANGO_URL}/api/countries/{code}/",
+                timeout=REQUEST_TIMEOUT_SECONDS,
             )
+        except requests.RequestException as exc:
+            return _backend_error_response("GET", f"/api/countries/{code}/", exc)
+
+        if response.status_code == 404:
+            try:
+                create_response = requests.post(
+                    f"{DJANGO_URL}/api/countries/",
+                    json={"code": code, "name": name},
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
+            except requests.RequestException as exc:
+                return _backend_error_response("POST", "/api/countries/", exc)
+
             if create_response.status_code >= 400:
                 return _backend_response(create_response)
+
         elif response.status_code >= 400:
             return _backend_response(response)
 
+    # 3. Ensure code types exist.
     for code_type_id, code_type in CODE_TYPES:
-        response = requests.get(f"{DJANGO_URL}/api/code-types/{code_type_id}/")
-        if response.status_code == 404:
-            create_response = requests.post(
-                f"{DJANGO_URL}/api/code-types/",
-                json={"id": code_type_id, "type": code_type},
+        try:
+            response = requests.get(
+                f"{DJANGO_URL}/api/code-types/{code_type_id}/",
+                timeout=REQUEST_TIMEOUT_SECONDS,
             )
+        except requests.RequestException as exc:
+            return _backend_error_response("GET", f"/api/code-types/{code_type_id}/", exc)
+
+        if response.status_code == 404:
+            try:
+                create_response = requests.post(
+                    f"{DJANGO_URL}/api/code-types/",
+                    json={"id": code_type_id, "type": code_type},
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
+            except requests.RequestException as exc:
+                return _backend_error_response("POST", "/api/code-types/", exc)
+
             if create_response.status_code >= 400:
                 return _backend_response(create_response)
+
         elif response.status_code >= 400:
             return _backend_response(response)
 
@@ -137,10 +245,10 @@ def setup():
 @app.route("/api/events/", methods=["GET"])
 def list_events():
     """
-    List events. Forward query parameters (e.g. page_size) to the backend.
+    List events. Forward query parameters to the backend.
     Backend: GET /api/events/
     """
-    return _proxy_get("/api/events/", dict(request.args))
+    return _proxy_get("/api/events/", _query_params())
 
 
 @app.route("/api/events/", methods=["POST"])
@@ -149,11 +257,11 @@ def create_event():
     Create a new event. Forward the JSON body to the backend.
     Backend: POST /api/events/
     """
-    return _proxy_post("/api/events/", request.get_json())
+    return _proxy_post("/api/events/", _json_body())
 
 
 @app.route("/api/events/<int:event_id>/", methods=["GET"])
-def get_event(event_id):
+def get_event(event_id: int):
     """
     Get a single event by ID.
     Backend: GET /api/events/<event_id>/
@@ -162,7 +270,7 @@ def get_event(event_id):
 
 
 @app.route("/api/events/<int:event_id>/", methods=["DELETE"])
-def delete_event(event_id):
+def delete_event(event_id: int):
     """
     Delete a single event by ID.
     Backend: DELETE /api/events/<event_id>/
@@ -178,11 +286,11 @@ def list_families():
     List product families. Forward query parameters to the backend.
     Backend: GET /api/product-families/
     """
-    return _proxy_get("/api/product-families/", dict(request.args))
+    return _proxy_get("/api/product-families/", _query_params())
 
 
 @app.route("/api/product-families/<int:family_id>/", methods=["GET"])
-def get_family(family_id):
+def get_family(family_id: int):
     """
     Get a single product family by ID.
     Backend: GET /api/product-families/<family_id>/
@@ -196,8 +304,7 @@ def recompute():
     Trigger family recomputation. Forward the JSON body to the backend.
     Backend: POST /api/product-families/recompute/
     """
-    # TODO: Implement
-    pass
+    return _proxy_post("/api/product-families/recompute/", _json_body())
 
 
 # ── Resolution ───────────────────────────────────────────────────────
@@ -208,8 +315,7 @@ def resolve():
     Resolve a code to its product family. Forward query parameters.
     Backend: GET /api/resolve/
     """
-    # TODO: Implement
-    pass
+    return _proxy_get("/api/resolve/", _query_params())
 
 
 @app.route("/api/resolve/reverse/", methods=["GET"])
@@ -218,8 +324,7 @@ def resolve_reverse():
     Reverse-resolve a family identifier to its codes. Forward query parameters.
     Backend: GET /api/resolve/reverse/
     """
-    # TODO: Implement
-    pass
+    return _proxy_get("/api/resolve/reverse/", _query_params())
 
 
 @app.route("/api/resolve/bulk/", methods=["POST"])
@@ -228,8 +333,7 @@ def resolve_bulk():
     Bulk-resolve codes. Forward the JSON body to the backend.
     Backend: POST /api/resolve/bulk/
     """
-    # TODO: Implement
-    pass
+    return _proxy_post("/api/resolve/bulk/", _json_body())
 
 
 if __name__ == "__main__":
