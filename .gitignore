@@ -14,3 +14,9 @@ env/
 !.env.example
 
 *.log
+
+# LaTeX auxiliary files
+*.aux
+*.fdb_latexmk
+*.fls
+*.toc
